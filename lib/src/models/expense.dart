@@ -4,6 +4,8 @@ class Expense {
   final double amount;
   final DateTime date;
   final String? notes;
+  final String? houseId; // optional: link to a property by id
+  final String? houseName; // optional: for display if needed
 
   Expense({
     required this.id,
@@ -11,6 +13,8 @@ class Expense {
     required this.amount,
     required this.date,
     this.notes,
+    this.houseId,
+    this.houseName,
   });
 
   Map<String, dynamic> toJson() => {
@@ -19,6 +23,8 @@ class Expense {
         'amount': amount,
         'date': date.toIso8601String(),
         'notes': notes,
+        'houseId': houseId,
+        'houseName': houseName,
       };
 
   factory Expense.fromJson(Map<String, dynamic> json) => Expense(
@@ -27,5 +33,7 @@ class Expense {
         amount: (json['amount'] as num).toDouble(),
         date: DateTime.parse(json['date'] as String),
         notes: json['notes'] as String?,
+        houseId: json['houseId'] as String?,
+        houseName: json['houseName'] as String?,
       );
 }

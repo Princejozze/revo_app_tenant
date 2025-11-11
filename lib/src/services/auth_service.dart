@@ -44,31 +44,44 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<UserCredential> signInWithGoogle() async {
-    if (kIsWeb) {
-      final googleProvider = GoogleAuthProvider();
-      googleProvider
-        ..addScope('email')
-        ..setCustomParameters({'prompt': 'select_account'});
-      final cred = await _auth.signInWithPopup(googleProvider);
-      _user = cred.user;
-      await _ensureLandlordDoc(_user);
-      notifyListeners();
-      return cred;
-    } else {
-      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
-      if (googleUser == null) {
-        throw Exception('Sign in aborted');
+    try {
+      if (kIsWeb) {
+        final googleProvider = GoogleAuthProvider();
+        googleProvider
+          ..addScope('email')
+          ..setCustomParameters({'prompt': 'select_account'});
+        final cred = await _auth.signInWithPopup(googleProvider);
+        _user = cred.user;
+        await _ensureLandlordDoc(_user);
+        notifyListeners();
+        return cred;
+      } else {
+        final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+        if (googleUser == null) {
+          throw Exception('Sign in aborted');
+        }
+        final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+        final credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+        final cred = await _auth.signInWithCredential(credential);
+        _user = cred.user;
+        await _ensureLandlordDoc(_user);
+        notifyListeners();
+        return cred;
       }
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-      final cred = await _auth.signInWithCredential(credential);
-      _user = cred.user;
-      await _ensureLandlordDoc(_user);
-      notifyListeners();
-      return cred;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'account-exists-with-different-credential' && e.email != null) {
+        final methods = await _auth.fetchSignInMethodsForEmail(e.email!);
+        final hint = methods.contains('password')
+            ? 'Use email and password login for ${e.email}'
+            : methods.isNotEmpty
+                ? 'Use ${methods.first} to sign in for ${e.email}'
+                : 'Try signing in with a different method for ${e.email}';
+        throw Exception('This email is already registered with a different sign-in method. $hint');
+      }
+      throw Exception(_mapAuthError(e));
     }
   }
 

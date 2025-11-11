@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import '../models/expense.dart';
 
 class ExpenseService extends ChangeNotifier {
@@ -36,6 +37,8 @@ class ExpenseService extends ChangeNotifier {
     required double amount,
     DateTime? date,
     String? notes,
+    String? houseId,
+    String? houseName,
   }) {
     final exp = Expense(
       id: 'exp-${DateTime.now().millisecondsSinceEpoch}',
@@ -43,6 +46,8 @@ class ExpenseService extends ChangeNotifier {
       amount: amount,
       date: date ?? DateTime.now(),
       notes: notes,
+      houseId: houseId,
+      houseName: houseName,
     );
     _expenses.add(exp);
     notifyListeners();
@@ -61,6 +66,45 @@ class ExpenseService extends ChangeNotifier {
     for (final e in _expenses) {
       if (e.date.isBefore(start) || e.date.isAfter(end)) continue;
       map[e.category] = (map[e.category] ?? 0) + e.amount;
+    }
+    return map;
+  }
+
+  // Sum total expenses within a date range
+  double sumTotal({required DateTime start, required DateTime end}) {
+    double total = 0;
+    for (final e in _expenses) {
+      if (e.date.isBefore(start) || e.date.isAfter(end)) continue;
+      total += e.amount;
+    }
+    return total;
+  }
+
+  // Sum expenses by property within a date range
+  Map<String, double> sumByProperty({required DateTime start, required DateTime end}) {
+    final map = <String, double>{};
+    for (final e in _expenses) {
+      if (e.date.isBefore(start) || e.date.isAfter(end)) continue;
+      final key = e.houseName ?? e.houseId ?? 'Unknown';
+      map[key] = (map[key] ?? 0) + e.amount;
+    }
+    return map;
+  }
+
+  // Sum expenses per month for a range
+  Map<String, double> sumByMonth({required DateTime start, required DateTime end}) {
+    final monthFmt = DateFormat('MMM yy');
+    final map = <String, double>{};
+    // initialize
+    int months = (end.year - start.year) * 12 + (end.month - start.month) + 1;
+    for (int i = 0; i < months; i++) {
+      final dt = DateTime(start.year, start.month + i, 1);
+      map[monthFmt.format(dt)] = 0;
+    }
+    for (final e in _expenses) {
+      if (e.date.isBefore(start) || e.date.isAfter(end)) continue;
+      final key = monthFmt.format(DateTime(e.date.year, e.date.month, 1));
+      map[key] = (map[key] ?? 0) + e.amount;
     }
     return map;
   }

@@ -7,6 +7,15 @@ class GroupedBarChart extends StatelessWidget {
   final Color colorA;
   final Color colorB;
   final List<String>? labels; // optional x-axis labels (length should match data)
+  final String legendALabel;
+  final String legendBLabel;
+  final bool showSeriesB;
+  final String title;
+  final List<double> seriesA; // e.g., Income
+  final List<double> seriesB; // e.g., Expenses
+  final Color colorA;
+  final Color colorB;
+  final List<String>? labels; // optional x-axis labels (length should match data)
 
   const GroupedBarChart({
     super.key,
@@ -16,7 +25,10 @@ class GroupedBarChart extends StatelessWidget {
     required this.colorA,
     required this.colorB,
     this.labels,
-  });
+    this.legendALabel = 'Income',
+    this.legendBLabel = 'Expenses',
+    bool? showSeriesB,
+  }) : showSeriesB = showSeriesB ?? (seriesB.any((v) => v != 0));
 
   @override
   Widget build(BuildContext context) {
@@ -37,10 +49,8 @@ class GroupedBarChart extends StatelessWidget {
       );
     }
 
-    final maxVal = [
-      ...seriesA,
-      ...seriesB,
-    ].fold<double>(0, (m, v) => v > m ? v : m);
+    final combined = showSeriesB ? [...seriesA, ...seriesB] : [...seriesA];
+    final maxVal = combined.fold<double>(0, (m, v) => v > m ? v : m);
     final safeMax = maxVal <= 0 ? 1.0 : maxVal;
 
     return Card(
@@ -60,6 +70,7 @@ class GroupedBarChart extends StatelessWidget {
                   colorA: colorA,
                   colorB: colorB,
                   maxVal: safeMax,
+                  showB: showSeriesB,
                 ),
                 child: labels != null && labels!.length == len
                     ? Align(
@@ -77,11 +88,13 @@ class GroupedBarChart extends StatelessWidget {
               children: [
                 _LegendDot(color: colorA),
                 const SizedBox(width: 6),
-                const Text('Income'),
-                const SizedBox(width: 16),
-                _LegendDot(color: colorB),
-                const SizedBox(width: 6),
-                const Text('Expenses'),
+                Text(legendALabel),
+                if (showSeriesB) ...[
+                  const SizedBox(width: 16),
+                  _LegendDot(color: colorB),
+                  const SizedBox(width: 6),
+                  Text(legendBLabel),
+                ],
               ],
             )
           ],
@@ -98,18 +111,21 @@ class _GroupedBarPainter extends CustomPainter {
   final Color colorB;
   final double maxVal;
 
-  _GroupedBarPainter({required this.a, required this.b, required this.colorA, required this.colorB, required this.maxVal});
+  final bool showB;
+
+  _GroupedBarPainter({required this.a, required this.b, required this.colorA, required this.colorB, required this.maxVal, required this.showB});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final barWidth = size.width / (a.length * 3); // group size ~ 3 units (spacing + 2 bars)
+    final groupFactor = showB ? 3 : 2; // spacing + bars
+    final barWidth = size.width / (a.length * groupFactor);
     final gap = barWidth; // space between groups
 
     final paintA = Paint()..color = colorA;
     final paintB = Paint()..color = colorB;
 
     for (int i = 0; i < a.length; i++) {
-      final groupLeft = i * (2 * barWidth + gap);
+      final groupLeft = i * ((showB ? 2 : 1) * barWidth + gap);
       final heightA = (a[i] / maxVal) * (size.height - 24); // leave space for labels
       final heightB = (b[i] / maxVal) * (size.height - 24);
 
@@ -117,9 +133,10 @@ class _GroupedBarPainter extends CustomPainter {
       final rectA = Rect.fromLTWH(groupLeft, (size.height - 24) - heightA, barWidth, heightA);
       canvas.drawRRect(RRect.fromRectAndRadius(rectA, const Radius.circular(4)), paintA);
 
-      // B bar
-      final rectB = Rect.fromLTWH(groupLeft + barWidth + (barWidth * 0.25), (size.height - 24) - heightB, barWidth, heightB);
-      canvas.drawRRect(RRect.fromRectAndRadius(rectB, const Radius.circular(4)), paintB);
+      if (showB) {
+        final rectB = Rect.fromLTWH(groupLeft + barWidth + (barWidth * 0.25), (size.height - 24) - heightB, barWidth, heightB);
+        canvas.drawRRect(RRect.fromRectAndRadius(rectB, const Radius.circular(4)), paintB);
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import 'package:myapp/src/widgets/add_property_dialog.dart';
 import 'package:myapp/src/widgets/tenant_search_dialog.dart';
 import 'package:myapp/src/widgets/house_list.dart';
 import 'package:myapp/src/widgets/simple_chart.dart';
+import 'package:myapp/src/widgets/pie_chart.dart';
 import 'package:myapp/src/screens/tenant_history_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -452,14 +453,62 @@ class DashboardScreen extends StatelessWidget {
   }
 
   Widget _buildAnalyticsSection(BuildContext context, DashboardMetrics metrics) {
+    final kpis = _computeDashboardKpis();
+    final currency = NumberFormat.currency(symbol: 'TZS ', decimalDigits: 0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Analytics',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Analytics Overview',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () => onNavigateToTab?.call(4), // navigate to Analytics tab if present
+              icon: const Icon(Icons.analytics),
+              label: const Text('View Full Analytics'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        // KPI row
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                context,
+                'Projected Yearly Income',
+                currency.format(kpis.projectedYearlyIncome),
+                Icons.calendar_month,
+                Colors.indigo,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildMetricCard(
+                context,
+                'Total Overdue',
+                currency.format(kpis.totalOverdue),
+                Icons.warning_amber,
+                Colors.red,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildMetricCard(
+                context,
+                'Avg Tenancy Duration',
+                '${kpis.avgTenancyYears.toStringAsFixed(1)} years',
+                Icons.timer,
+                Colors.teal,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Row(
@@ -473,10 +522,9 @@ class DashboardScreen extends StatelessWidget {
             ),
             const SizedBox(width: 16),
             Expanded(
-              child: SimpleChart(
-                title: 'Revenue Trend',
-                data: _generateRevenueTrend(),
-                color: Colors.green,
+              child: PieChartWidget(
+                title: 'On-Time vs Overdue Tenants',
+                data: _computeOnTimeVsOverdue(),
               ),
             ),
           ],
@@ -585,9 +633,18 @@ class DashboardScreen extends StatelessWidget {
     return map.values.toList();
   }
 
-  List<double> _generateRevenueTrend() {
-    // Generate sample revenue trend data (last 7 days)
-    return [120000, 125000, 130000, 135000, 140000, 145000, 150000];
+  Map<String, double> _computeOnTimeVsOverdue() {
+    int onTime = 0;
+    int overdue = 0;
+    final houses = context.read<HouseService>().houses;
+    for (final h in houses) {
+      for (final r in h.rooms) {
+        final t = r.tenant;
+        if (t == null) continue;
+        if (t.isOverdue) overdue++; else onTime++;
+      }
+    }
+    return {'On-Time': onTime.toDouble(), 'Overdue': overdue.toDouble()};
   }
 
   void _navigateToProperties(BuildContext context) {

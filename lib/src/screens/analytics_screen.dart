@@ -7,7 +7,10 @@ import 'package:myapp/src/models/tenant.dart';
 import 'package:myapp/src/widgets/simple_chart.dart';
 import 'package:myapp/src/widgets/grouped_bar_chart.dart';
 import 'package:myapp/src/widgets/pie_chart.dart';
+import 'package:myapp/src/widgets/bar_chart.dart';
 import 'package:myapp/src/services/expense_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -24,14 +27,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     return Consumer<HouseService>(
       builder: (context, houseService, _) {
         final houses = houseService.houses;
-        final monthlyNet = _computeMonthlyNetProfit(houses, months: 12);
-        final yearlyNet = _computeYearlyNetProfit(houses, years: 3);
+        final expenseService = context.watch<ExpenseService>();
+        final monthlyNet = _computeMonthlyNetProfit(houses, expenseService, months: 12);
+        final yearlyNet = _computeYearlyNetProfit(houses, expenseService, years: 3);
         final currency = NumberFormat.currency(symbol: 'TZS ', decimalDigits: 0);
 
         // Expense Category Breakdown (last 12 months)
         final now = DateTime.now();
         final start = DateTime(now.year, now.month - 11, 1);
-        final expenseService = context.watch<ExpenseService>();
         final categorySums = expenseService.sumByCategory(start: start, end: now);
 
         final totalIncomeLast12 = _sum(monthlyNet.map((e) => e.income).toList());
@@ -82,6 +85,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ),
                 const SizedBox(height: 16),
 
+                // High-level KPIs
+                _kpiRow(context, houses),
+                const SizedBox(height: 12),
+                _turnoverKpi(context, houses),
+                const SizedBox(height: 16),
+
                 // Rent Averages (overall & per property)
                 _rentAverages(context, avgOverall, avgByProperty),
                 const SizedBox(height: 16),
@@ -107,28 +116,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
                 const SizedBox(height: 24),
 
-                // Income vs Expenses (Monthly)
-                if (!_yearly)
-                  GroupedBarChart(
-                    title: 'Income vs Expenses (Monthly)',
-                    seriesA: monthlyNet.map((e) => e.income).toList(),
-                    seriesB: monthlyNet.map((e) => e.expenses).toList(),
-                    colorA: Colors.green,
-                    colorB: Colors.red,
-                    labels: monthlyNet.map((e) => e.label).toList(),
-                  ),
-
-                // Income vs Expenses (Yearly)
-                if (_yearly)
-                  GroupedBarChart(
-                    title: 'Income vs Expenses (Yearly)',
-                    seriesA: yearlyNet.map((e) => e.income).toList(),
-                    seriesB: yearlyNet.map((e) => e.expenses).toList(),
-                    colorA: Colors.green,
-                    colorB: Colors.red,
-                    labels: yearlyNet.map((e) => e.year.toString()).toList(),
-                  ),
-
+                // Income vs Expenses by Property
+                _incomeVsExpensesByProperty(context, houses),
                 const SizedBox(height: 24),
 
                 // Expense Category Breakdown (Pie)
@@ -139,9 +128,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
                 const SizedBox(height: 24),
 
-                // Tabular (monthly) breakdown
+                // Utilization charts
+                _occupancyByProperty(context, houses),
+                const SizedBox(height: 24),
+                _onTimeVsOverdueChart(context, houses),
+
+                const SizedBox(height: 24),
+
+                // Tabular breakdown
                 if (!_yearly) _monthlyTable(context, monthlyNet),
                 if (_yearly) _yearlyTable(context, yearlyNet),
+
+                const SizedBox(height: 24),
+                _overdueRanking(context, houses),
+                const SizedBox(height: 24),
+                _overduePropertiesRanking(context, houses),
               ],
             ),
           ),
@@ -169,7 +170,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   }
 
   // Compute monthly net profit for last [months] months
-  List<_MonthlyNet> _computeMonthlyNetProfit(List houses, {int months = 12}) {
+  List<_MonthlyNet> _computeMonthlyNetProfit(List houses, ExpenseService expenseService, {int months = 12}) {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month - (months - 1), 1);
     final Map<String, _MonthlyNet> map = {};
@@ -195,12 +196,19 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       }
     }
 
-    // expenses: not tracked yet, keep 0
+    // expenses from ExpenseService by month
+    final expensesByMonth = expenseService.sumByMonth(start: start, end: now);
+    for (final entry in map.entries) {
+      final label = entry.key;
+      final current = entry.value;
+      final exp = expensesByMonth[label] ?? 0;
+      map[label] = current.copyWith(expenses: current.expenses + exp);
+    }
 
     return map.values.map((e) => e.withNet()).toList();
   }
 
-  List<_YearlyNet> _computeYearlyNetProfit(List houses, {int years = 3}) {
+  List<_YearlyNet> _computeYearlyNetProfit(List houses, ExpenseService expenseService, {int years = 3}) {
     final now = DateTime.now();
     final startYear = now.year - (years - 1);
     final Map<int, _YearlyNet> map = { for (int y = startYear; y <= now.year; y++) y: _YearlyNet(year: y, income: 0, expenses: 0) };
@@ -360,6 +368,256 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     }
     return result;
   }
+
+  // KPI row with occupancy, projected income, avg tenancy duration, total overdue
+  Widget _kpiRow(BuildContext context, List houses) {
+    final theme = Theme.of(context);
+    final currency = NumberFormat.currency(symbol: 'TZS ', decimalDigits: 0);
+    final kpis = _computeKpis(houses);
+
+    return Row(
+      children: [
+        Expanded(
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Overall Occupancy', style: theme.textTheme.bodySmall),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('${kpis.occupancyRate.toStringAsFixed(1)}%', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                      SizedBox(width: 120, child: LinearProgressIndicator(value: (kpis.occupancyRate / 100).clamp(0.0, 1.0))),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text('${kpis.occupiedRooms}/${kpis.totalRooms} rooms occupied', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _metricCard(context, 'Projected Yearly Income', currency.format(kpis.projectedYearlyIncome), Icons.calendar_month, Colors.indigo),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _metricCard(context, 'Avg Tenancy Duration', '${kpis.avgTenancyYears.toStringAsFixed(1)} years', Icons.timer, Colors.teal),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _metricCard(context, 'Total Overdue', currency.format(kpis.totalOverdue), Icons.warning_amber, Colors.red),
+        ),
+      ],
+    );
+  }
+
+  _Kpis _computeKpis(List houses) {
+    int totalRooms = 0;
+    int occupiedRooms = 0;
+    double projectedYearly = 0;
+    double totalOverdue = 0;
+    final now = DateTime.now();
+    int tenantCount = 0;
+    double totalTenancyDays = 0;
+
+    for (final h in houses) {
+      totalRooms += h.totalRooms;
+      occupiedRooms += h.rooms.where((r) => r.status.toString().contains('occupied')).length;
+      for (final r in h.rooms) {
+        if (r.tenant != null) {
+          final t = r.tenant!;
+          tenantCount++;
+          totalTenancyDays += now.difference(t.startDate).inDays.toDouble();
+          projectedYearly += r.rentAmount * 12;
+          if (t.isOverdue) totalOverdue += t.balance;
+        }
+      }
+    }
+
+    final occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0.0;
+    final avgTenancyYears = tenantCount > 0 ? (totalTenancyDays / tenantCount) / 365.0 : 0.0;
+
+    return _Kpis(
+      occupancyRate: occupancyRate,
+      totalRooms: totalRooms,
+      occupiedRooms: occupiedRooms,
+      projectedYearlyIncome: projectedYearly,
+      totalOverdue: totalOverdue,
+      avgTenancyYears: avgTenancyYears,
+    );
+  }
+
+  Widget _incomeVsExpensesByProperty(BuildContext context, List houses) {
+    // Aggregate by property: income last 12 months, expenses currently 0 (placeholder)
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month - 11, 1);
+    final names = <String>[];
+    final income = <double>[];
+    final expenses = <double>[];
+
+    // Income per property
+    for (final h in houses) {
+      double inc = 0;
+      for (final r in h.rooms) {
+        final t = r.tenant;
+        if (t == null) continue;
+        for (final p in t.payments) {
+          if (p.date.isBefore(start) || p.date.isAfter(now)) continue;
+          inc += p.amount;
+        }
+      }
+      names.add(h.name);
+      income.add(inc);
+    }
+    // Expenses per property from ExpenseService
+    final expenseService = context.read<ExpenseService>();
+    final expByProp = expenseService.sumByProperty(start: start, end: now);
+    for (final n in names) {
+      expenses.add(expByProp[n] ?? 0);
+    }
+
+    return GroupedBarChart(
+      title: 'Income vs Expenses by Property (12m)',
+      seriesA: income,
+      seriesB: expenses,
+      colorA: Colors.green,
+      colorB: Colors.red,
+      labels: names,
+      legendALabel: 'Income',
+      legendBLabel: 'Expenses',
+    );
+  }
+
+  Widget _occupancyByProperty(BuildContext context, List houses) {
+    final labels = <String>[];
+    final data = <double>[];
+    for (final h in houses) {
+      final total = h.totalRooms;
+      final occ = h.rooms.where((r) => r.status.toString().contains('occupied')).length;
+      final rate = total > 0 ? (occ / total) * 100 : 0.0;
+      labels.add(h.name);
+      data.add(rate);
+    }
+    return BarChartWidget(title: 'Occupancy Rate by Property', data: data, labels: labels, color: Colors.blueAccent);
+  }
+
+  Widget _onTimeVsOverdueChart(BuildContext context, List houses) {
+    int onTime = 0;
+    int overdue = 0;
+    for (final h in houses) {
+      for (final r in h.rooms) {
+        final t = r.tenant;
+        if (t == null) continue;
+        if (t.isOverdue) {
+          overdue++;
+        } else {
+          onTime++;
+        }
+      }
+    }
+    return PieChartWidget(title: 'On-Time vs Overdue Tenants', data: {'On-Time': onTime.toDouble(), 'Overdue': overdue.toDouble()});
+  }
+
+  Future<int> _countMoveOutsLastYear() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('tenant_history');
+    if (raw == null) return 0;
+    final list = (json.decode(raw) as List).cast<Map<String, dynamic>>();
+    final oneYearAgo = DateTime.now().subtract(const Duration(days: 365));
+    int count = 0;
+    for (final m in list) {
+      final moveOut = DateTime.parse(m['moveOutDate'] as String);
+      if (!moveOut.isBefore(oneYearAgo)) count++;
+    }
+    return count;
+  }
+
+  Widget _turnoverKpi(BuildContext context, List houses) {
+    final totalRooms = houses.fold<int>(0, (a, h) => a + h.totalRooms);
+    return FutureBuilder<int>(
+      future: _countMoveOutsLastYear(),
+      builder: (context, snapshot) {
+        final moveOuts = snapshot.data ?? 0;
+        final rate = totalRooms > 0 ? (moveOuts / totalRooms) * 100 : 0.0;
+        return Row(
+          children: [
+            Expanded(
+              child: _metricCard(
+                context,
+                'Tenant Turnover Rate (12m)',
+                '${rate.toStringAsFixed(1)}%',
+                Icons.swap_horiz,
+                Colors.deepOrange,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _metricCard(
+                context,
+                'Move-outs (12m)',
+                moveOuts.toString(),
+                Icons.logout,
+                Colors.grey,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(child: SizedBox()),
+            const SizedBox(width: 12),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _overdueRanking(BuildContext context, List houses) {
+    final currency = NumberFormat.currency(symbol: 'TZS ', decimalDigits: 0);
+    final entries = <_OverdueEntry>[];
+    for (final h in houses) {
+      for (final r in h.rooms) {
+        final t = r.tenant;
+        if (t == null) continue;
+        if (t.isOverdue) {
+          entries.add(_OverdueEntry(house: h.name, tenant: t.fullName, amount: t.balance));
+        }
+      }
+    }
+    entries.sort((a, b) => b.amount.compareTo(a.amount));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Most Frequently Overdue Tenants', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (entries.isEmpty)
+              Text('No overdue tenants', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant))
+            else
+              DataTable(columns: const [
+                DataColumn(label: Text('#')),
+                DataColumn(label: Text('Tenant')),
+                DataColumn(label: Text('Property')),
+                DataColumn(label: Text('Amount Overdue')),
+              ], rows: [
+                for (int i = 0; i < entries.length && i < 10; i++)
+                  DataRow(cells: [
+                    DataCell(Text((i + 1).toString())),
+                    DataCell(Text(entries[i].tenant)),
+                    DataCell(Text(entries[i].house)),
+                    DataCell(Text(currency.format(entries[i].amount))),
+                  ])
+              ]),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _MonthlyNet {
@@ -380,4 +638,5 @@ class _YearlyNet {
   _YearlyNet({required this.year, required this.income, required this.expenses}) : net = income - expenses;
   _YearlyNet copyWith({double? income, double? expenses}) => _YearlyNet(year: year, income: income ?? this.income, expenses: expenses ?? this.expenses);
   _YearlyNet withNet() => _YearlyNet(year: year, income: income, expenses: expenses);
+}
 }
